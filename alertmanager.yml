@@ -1,0 +1,144 @@
+# Alertmanager configuration for KAA HO Chat
+# Handles routing and delivery of alerts
+
+global:
+  # SMTP Configuration for Email Alerts
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'your-email@gmail.com'
+  smtp_auth_username: 'your-email@gmail.com'
+  smtp_auth_password: 'your-app-password'  # Use App Password, not regular password
+  smtp_require_tls: true
+
+# Alert routing rules
+route:
+  # Default receiver for all alerts
+  receiver: 'default-receiver'
+  
+  # How long to wait before sending notification
+  group_wait: 10s
+  
+  # How long to wait before sending notification about new alerts in same group
+  group_interval: 10s
+  
+  # How long to wait before re-sending notification
+  repeat_interval: 12h
+  
+  # Group alerts by these labels
+  group_by: ['alertname', 'severity']
+  
+  # Routing rules for different alert types
+  routes:
+    # Critical alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 0s
+      repeat_interval: 5m
+      continue: true
+    
+    # Warning alerts - less urgent
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      group_wait: 30s
+      repeat_interval: 2h
+      continue: true
+    
+    # Performance alerts
+    - match:
+        category: performance
+      receiver: 'performance-team'
+      continue: true
+    
+    # Security alerts
+    - match:
+        category: security
+      receiver: 'security-team'
+      continue: true
+
+# Alert receivers (notification channels)
+receivers:
+  # Default receiver (Email)
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'admin@your-domain.com'
+        headers:
+          Subject: '[KAA HO] Alert: {{ .GroupLabels.alertname }}'
+        html: |
+          <h2>🚨 KAA HO Chat Alert</h2>
+          <p><strong>Alert:</strong> {{ .GroupLabels.alertname }}</p>
+          <p><strong>Severity:</strong> {{ .GroupLabels.severity }}</p>
+          <p><strong>Time:</strong> {{ .StartsAt }}</p>
+          <hr>
+          {{ range .Alerts }}
+          <p><strong>Description:</strong> {{ .Annotations.description }}</p>
+          <p><strong>Summary:</strong> {{ .Annotations.summary }}</p>
+          {{ end }}
+  
+  # Critical alerts (Email + SMS via Twilio)
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'admin@your-domain.com, manager@your-domain.com'
+        send_resolved: true
+        headers:
+          Subject: '🚨 CRITICAL ALERT: {{ .GroupLabels.alertname }}'
+        html: |
+          <div style="background: #ff0000; color: white; padding: 20px;">
+            <h1>🚨 CRITICAL ALERT</h1>
+            <h2>{{ .GroupLabels.alertname }}</h2>
+            <p><strong>Immediate action required!</strong></p>
+            <p>Time: {{ .StartsAt }}</p>
+            {{ range .Alerts }}
+            <p>{{ .Annotations.description }}</p>
+            {{ end }}
+          </div>
+    
+    # SMS via Webhook (Twilio)
+    webhook_configs:
+      - url: 'http://your-server:5000/api/alerts/sms'
+        send_resolved: false
+  
+  # Warning alerts (Email only)
+  - name: 'warning-alerts'
+    email_configs:
+      - to: 'team@your-domain.com'
+        send_resolved: true
+        headers:
+          Subject: '⚠️ Warning: {{ .GroupLabels.alertname }}'
+  
+  # Performance team
+  - name: 'performance-team'
+    email_configs:
+      - to: 'performance@your-domain.com'
+    
+    # Slack notifications
+    slack_configs:
+      - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+        channel: '#performance-alerts'
+        title: 'Performance Alert: {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          {{ end }}
+        send_resolved: true
+  
+  # Security team
+  - name: 'security-team'
+    email_configs:
+      - to: 'security@your-domain.com'
+    
+    # PagerDuty integration (optional)
+    pagerduty_configs:
+      - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
+        description: '{{ .GroupLabels.alertname }}'
+
+# Inhibition rules (prevent duplicate alerts)
+inhibit_rules:
+  # Inhibit warning if critical alert is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']

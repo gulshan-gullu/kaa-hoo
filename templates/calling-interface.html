@@ -1,0 +1,508 @@
+<!-- CA360 Chat - Complete Video Calling Interface -->
+<!-- Add this to your index.html before closing </body> tag -->
+
+<!-- Call Modal Container -->
+<div id="call-modal" class="call-modal" style="display: none;">
+    
+    <!-- Incoming Call Screen -->
+    <div id="incoming-call-screen" class="call-screen incoming-call">
+        <div class="call-avatar">
+            <div class="avatar-circle">
+                <i class="fas fa-user"></i>
+            </div>
+        </div>
+        
+        <div class="call-info">
+            <h2 class="incoming-caller-name">Unknown Caller</h2>
+            <p class="incoming-call-type">Voice Call</p>
+        </div>
+        
+        <div class="call-actions incoming-actions">
+            <button id="reject-call-btn" class="call-btn btn-reject">
+                <i class="fas fa-times"></i>
+                <span>Decline</span>
+            </button>
+            <button id="accept-call-btn" class="call-btn btn-accept">
+                <i class="fas fa-phone"></i>
+                <span>Accept</span>
+            </button>
+        </div>
+    </div>
+    
+    <!-- Active Call Screen -->
+    <div id="active-call-screen" class="call-screen active-call" style="display: none;">
+        
+        <!-- Video Container (for video calls) -->
+        <div class="video-container">
+            <!-- Remote Video (large) -->
+            <video id="remoteVideo" class="remote-video" autoplay playsinline></video>
+            
+            <!-- Local Video (small, picture-in-picture) -->
+            <video id="localVideo" class="local-video" autoplay playsinline muted></video>
+            
+            <!-- Audio element for audio-only calls -->
+            <audio id="remoteAudio" autoplay></audio>
+            
+            <!-- Call overlay info -->
+            <div class="call-overlay">
+                <div class="call-header">
+                    <div class="caller-info">
+                        <h3 id="active-caller-name">Connecting...</h3>
+                        <p id="call-status">Calling...</p>
+                    </div>
+                    <div class="call-meta">
+                        <span id="call-duration">00:00</span>
+                        <span id="connection-quality" class="connection-quality good">Good</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Call Controls -->
+        <div class="call-controls">
+            <button id="toggle-mute-btn" class="control-btn">
+                <i class="fas fa-microphone"></i>
+                <span>Mute</span>
+            </button>
+            
+            <button id="toggle-video-btn" class="control-btn video-control">
+                <i class="fas fa-video"></i>
+                <span>Camera</span>
+            </button>
+            
+            <button id="toggle-screen-btn" class="control-btn screen-control">
+                <i class="fas fa-desktop"></i>
+                <span>Share</span>
+            </button>
+            
+            <button id="end-call-btn" class="control-btn btn-end-call">
+                <i class="fas fa-phone-slash"></i>
+                <span>End</span>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Call Button in Chat Interface -->
+<!-- Add this next to your message input -->
+<div class="chat-call-buttons">
+    <button onclick="initiateCall(currentContact.id, 'audio')" class="call-btn-icon audio-call" title="Voice Call">
+        <i class="fas fa-phone"></i>
+    </button>
+    <button onclick="initiateCall(currentContact.id, 'video')" class="call-btn-icon video-call" title="Video Call">
+        <i class="fas fa-video"></i>
+    </button>
+</div>
+
+<style>
+/* CA360 Chat - Complete Calling Styles */
+
+/* Call Modal */
+.call-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.95);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Call Screen Base */
+.call-screen {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+/* Incoming Call */
+.incoming-call {
+    text-align: center;
+    color: white;
+}
+
+.call-avatar {
+    margin-bottom: 30px;
+}
+
+.avatar-circle {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+    font-size: 48px;
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.8; }
+}
+
+.call-info {
+    margin-bottom: 40px;
+}
+
+.incoming-caller-name {
+    font-size: 32px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    color: white;
+}
+
+.incoming-call-type {
+    font-size: 18px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Call Actions */
+.call-actions {
+    display: flex;
+    gap: 30px;
+}
+
+.call-btn {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.call-btn i {
+    font-size: 24px;
+}
+
+.btn-reject {
+    background: #ff4757;
+    color: white;
+}
+
+.btn-reject:hover {
+    background: #ee5a6f;
+    transform: scale(1.05);
+}
+
+.btn-accept {
+    background: #2ecc71;
+    color: white;
+}
+
+.btn-accept:hover {
+    background: #27ae60;
+    transform: scale(1.05);
+}
+
+/* Active Call */
+.active-call {
+    padding: 0;
+}
+
+.video-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #000;
+}
+
+/* Remote Video (main) */
+.remote-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Local Video (PiP) */
+.local-video {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 200px;
+    height: 150px;
+    border-radius: 12px;
+    object-fit: cover;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 10;
+}
+
+/* Call Overlay */
+.call-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 20px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%);
+    z-index: 5;
+}
+
+.call-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    color: white;
+}
+
+.caller-info h3 {
+    font-size: 24px;
+    margin-bottom: 5px;
+}
+
+.caller-info p {
+    font-size: 14px;
+    opacity: 0.8;
+}
+
+.call-meta {
+    text-align: right;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+#call-duration {
+    font-size: 18px;
+    font-weight: 600;
+    font-family: 'Courier New', monospace;
+}
+
+.connection-quality {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.connection-quality.good {
+    background: rgba(46, 204, 113, 0.3);
+    color: #2ecc71;
+}
+
+.connection-quality.poor {
+    background: rgba(241, 196, 15, 0.3);
+    color: #f1c40f;
+}
+
+.connection-quality.bad {
+    background: rgba(231, 76, 60, 0.3);
+    color: #e74c3c;
+}
+
+/* Call Controls */
+.call-controls {
+    position: absolute;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 20px;
+    padding: 20px;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(10px);
+    border-radius: 50px;
+    z-index: 10;
+}
+
+.control-btn {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    transition: all 0.3s ease;
+}
+
+.control-btn i {
+    font-size: 20px;
+}
+
+.control-btn span {
+    font-size: 10px;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.control-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateY(-5px);
+}
+
+.control-btn:hover span {
+    opacity: 1;
+}
+
+.control-btn.active {
+    background: rgba(255, 71, 87, 0.8);
+}
+
+.btn-end-call {
+    background: #ff4757;
+}
+
+.btn-end-call:hover {
+    background: #ee5a6f;
+}
+
+/* Audio-only call styling */
+.audio-call .video-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.audio-call .local-video,
+.audio-call .remote-video {
+    display: none;
+}
+
+.audio-call .call-overlay {
+    position: static;
+    background: none;
+}
+
+/* Call Buttons in Chat */
+.chat-call-buttons {
+    display: flex;
+    gap: 10px;
+    margin-left: 10px;
+}
+
+.call-btn-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+}
+
+.call-btn-icon:hover {
+    transform: scale(1.1);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.call-btn-icon.video-call {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+.call-btn-icon.video-call:hover {
+    box-shadow: 0 4px 12px rgba(245, 87, 108, 0.4);
+}
+
+/* Toast Notifications */
+.call-toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 15px 25px;
+    border-radius: 8px;
+    color: white;
+    font-weight: 500;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 100000;
+    opacity: 0;
+    transform: translateX(100%);
+    transition: all 0.3s ease;
+}
+
+.call-toast.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.call-toast.info {
+    background: #3498db;
+}
+
+.call-toast.error {
+    background: #e74c3c;
+}
+
+.call-toast.success {
+    background: #2ecc71;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .local-video {
+        width: 120px;
+        height: 90px;
+        top: 10px;
+        right: 10px;
+    }
+    
+    .call-controls {
+        bottom: 20px;
+        padding: 15px;
+        gap: 15px;
+    }
+    
+    .control-btn {
+        width: 50px;
+        height: 50px;
+    }
+    
+    .control-btn span {
+        display: none;
+    }
+    
+    .incoming-caller-name {
+        font-size: 24px;
+    }
+    
+    .call-btn {
+        width: 70px;
+        height: 70px;
+    }
+}
+
+@media (max-width: 480px) {
+    .local-video {
+        width: 100px;
+        height: 75px;
+    }
+    
+    .call-header {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .call-meta {
+        flex-direction: row;
+        gap: 15px;
+    }
+}
+</style>

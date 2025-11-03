@@ -1,0 +1,115 @@
+﻿/* ==========================================
+   FINAL VISIBILITY FIX
+   More specific than style.css
+   ========================================== */
+
+/* Override body styles */
+html body {
+    background: linear-gradient(135deg, #0b141a 0%, #1a2d3a 100%) !important;
+    color: #e9edef !important;
+}
+
+/* Override main-app */
+html body #main-app {
+    background: rgba(17, 27, 33, 0.95) !important;
+    display: flex !important;
+}
+
+/* Override sidebars */
+html body #main-app .icon-sidebar,
+html body #main-app .glass-sidebar {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Override chat area */
+html body #main-app #chat-area {
+    display: flex !important;
+    visibility: visible !important;
+}
+
+/* Make ALL text visible */
+html body h1,
+html body h2,
+html body h3,
+html body h4,
+html body p,
+html body span,
+html body div,
+html body button {
+    color: #e9edef !important;
+}
+
+/* Override contact items */
+html body .contact-item h4 {
+    color: #e9edef !important;
+}
+
+/* Override call buttons - CRITICAL */
+html body #voice-call-btn,
+html body #video-call-btn,
+html body .call-btn {
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: flex !important;
+}
+
+html body #voice-call-btn {
+    background: #25d366 !important;
+}
+
+html body #video-call-btn {
+    background: #2196f3 !important;
+}
+
+/* Make button icons visible */
+html body #voice-call-btn svg,
+html body #video-call-btn svg {
+    stroke: #ffffff !important;
+    fill: none !important;
+}
+
+/* Override chat header */
+html body .chat-header {
+    background: rgba(42, 57, 66, 0.9) !important;
+}
+
+html body .chat-header h3,
+html body .chat-header .status-text {
+    color: #e9edef !important;
+}
+
+/* Override messages */
+html body .chat-messages {
+    background: rgba(11, 20, 26, 0.5) !important;
+}
+
+html body .message-bubble {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+html body .message.received .message-bubble {
+    background: rgba(42, 57, 66, 0.9) !important;
+    color: #e9edef !important;
+}
+
+html body .message.sent .message-bubble {
+    background: rgba(0, 95, 77, 0.9) !important;
+    color: #e9edef !important;
+}
+
+/* Override input */
+html body .chat-input-wrapper {
+    background: rgba(17, 27, 33, 0.95) !important;
+}
+
+html body #chat-input {
+    color: #e9edef !important;
+    background: transparent !important;
+}
+
+html body .send-btn {
+    background: #25d366 !important;
+    opacity: 1 !important;
+}

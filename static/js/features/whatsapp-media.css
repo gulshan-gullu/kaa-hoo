@@ -1,0 +1,4 @@
+﻿/* WhatsApp Media Styles */
+.media-message { max-width: 300px; }
+.media-message img { width: 100%; border-radius: 8px; }
+.media-message video { width: 100%; border-radius: 8px; }

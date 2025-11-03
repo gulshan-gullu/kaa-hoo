@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Biometric Login Test - KAA HO Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+            border-left: 4px solid #1976d2;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+            border-left: 4px solid #388e3c;
+        }
+
+        .status.error {
+            background: #ffebee;
+            color: #d32f2f;
+            border-left: 4px solid #d32f2f;
+        }
+
+        .status.warning {
+            background: #fff3e0;
+            color: #f57c00;
+            border-left: 4px solid #f57c00;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #e0e0e0;
+        }
+
+        .icon {
+            font-size: 24px;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .device-list {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid #f0f0f0;
+        }
+
+        .device-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+
+        .device-info {
+            flex: 1;
+        }
+
+        .device-name {
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 4px;
+        }
+
+        .device-date {
+            font-size: 12px;
+            color: #999;
+        }
+
+        .btn-remove {
+            padding: 6px 12px;
+            background: #ffebee;
+            color: #d32f2f;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .btn-remove:hover {
+            background: #ffcdd2;
+        }
+
+        .feature-check {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            font-size: 14px;
+        }
+
+        .check-icon {
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 Biometric Login Test</h1>
+        <p class="subtitle">Test fingerprint & face recognition</p>
+
+        <div id="status" class="status"></div>
+
+        <!-- Feature Detection -->
+        <div id="features"></div>
+
+        <!-- Login First -->
+        <div id="loginSection">
+            <h3 style="margin-bottom: 15px; color: #333;">Step 1: Login First</h3>
+            <div class="input-group">
+                <label>User ID / Email / Mobile</label>
+                <input type="text" id="userId" placeholder="Enter your user ID">
+            </div>
+            <div class="input-group">
+                <label>Password</label>
+                <input type="password" id="password" placeholder="Enter password">
+            </div>
+            <button class="btn btn-primary" onclick="login()">
+                <span class="icon">🔑</span>
+                Login
+            </button>
+        </div>
+
+        <!-- Biometric Actions (hidden until logged in) -->
+        <div id="biometricSection" style="display: none;">
+            <h3 style="margin-bottom: 15px; color: #333;">Step 2: Test Biometric</h3>
+            
+            <button class="btn btn-primary" onclick="registerBiometric()">
+                <span class="icon">👆</span>
+                Register Fingerprint/Face
+            </button>
+
+            <button class="btn btn-secondary" onclick="testAuthentication()">
+                <span class="icon">✅</span>
+                Test Biometric Login
+            </button>
+
+            <button class="btn btn-secondary" onclick="loadDevices()">
+                <span class="icon">📱</span>
+                Show My Devices
+            </button>
+
+            <div id="deviceList" class="device-list" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        // Check WebAuthn support
+        window.addEventListener('DOMContentLoaded', checkSupport);
+
+        async function checkSupport() {
+            const featuresDiv = document.getElementById('features');
+            let html = '';
+
+            // Check WebAuthn
+            if (window.PublicKeyCredential) {
+                html += '<div class="feature-check"><span class="check-icon">✅</span> WebAuthn Supported</div>';
+                
+                // Check platform authenticator
+                const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+                if (available) {
+                    html += '<div class="feature-check"><span class="check-icon">✅</span> Biometric Device Available</div>';
+                } else {
+                    html += '<div class="feature-check"><span class="check-icon">⚠️</span> No Biometric Device Found</div>';
+                }
+            } else {
+                html += '<div class="feature-check"><span class="check-icon">❌</span> WebAuthn Not Supported</div>';
+            }
+
+            featuresDiv.innerHTML = html;
+        }
+
+        function showStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.className = `status ${type}`;
+            status.textContent = message;
+            status.style.display = 'block';
+        }
+
+        function hideStatus() {
+            document.getElementById('status').style.display = 'none';
+        }
+
+        // Helper functions
+        function base64urlToUint8Array(base64url) {
+            const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        function uint8ArrayToBase64url(uint8Array) {
+            const binary = String.fromCharCode(...uint8Array);
+            const base64 = btoa(binary);
+            return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+        }
+
+        // Login
+        async function login() {
+            const userId = document.getElementById('userId').value.trim();
+            const password = document.getElementById('password').value.trim();
+
+            if (!userId || !password) {
+                showStatus('Please enter user ID and password', 'error');
+                return;
+            }
+
+            try {
+                showStatus('Logging in...', 'info');
+
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('✅ Login successful! Now you can test biometric.', 'success');
+                    document.getElementById('loginSection').style.display = 'none';
+                    document.getElementById('biometricSection').style.display = 'block';
+                } else {
+                    showStatus('❌ Login failed: ' + data.message, 'error');
+                }
+            } catch (error) {
+                showStatus('❌ Error: ' + error.message, 'error');
+            }
+        }
+
+        // Register Biometric
+        async function registerBiometric() {
+            try {
+                showStatus('👆 Starting biometric registration...', 'info');
+
+                // Step 1: Get registration options
+                const response1 = await fetch('/api/biometric/register/begin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data1 = await response1.json();
+                if (!data1.success) {
+                    throw new Error(data1.message);
+                }
+
+                showStatus('👆 Please authenticate with your device...', 'info');
+
+                // Step 2: Create credential
+                const options = data1.options;
+                const publicKey = {
+                    ...options,
+                    challenge: base64urlToUint8Array(options.challenge),
+                    user: {
+                        ...options.user,
+                        id: base64urlToUint8Array(options.user.id)
+                    }
+                };
+
+                const credential = await navigator.credentials.create({ publicKey });
+
+                if (!credential) {
+                    throw new Error('Authentication cancelled');
+                }
+
+                showStatus('💾 Saving credential...', 'info');
+
+                // Step 3: Send to server
+                const credentialData = {
+                    id: credential.id,
+                    rawId: uint8ArrayToBase64url(new Uint8Array(credential.rawId)),
+                    type: credential.type,
+                    response: {
+                        clientDataJSON: uint8ArrayToBase64url(new Uint8Array(credential.response.clientDataJSON)),
+                        attestationObject: uint8ArrayToBase64url(new Uint8Array(credential.response.attestationObject))
+                    }
+                };
+
+                const response2 = await fetch('/api/biometric/register/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ credential: credentialData, device_name: 'My Device' })
+                });
+
+                const data2 = await response2.json();
+
+                if (data2.success) {
+                    showStatus('🎉 Biometric registered successfully!', 'success');
+                } else {
+                    throw new Error(data2.message);
+                }
+
+            } catch (error) {
+                showStatus('❌ Registration failed: ' + error.message, 'error');
+            }
+        }
+
+        // Test Authentication
+        async function testAuthentication() {
+            const userId = document.getElementById('userId').value.trim();
+
+            try {
+                showStatus('👆 Starting biometric login...', 'info');
+
+                // Step 1: Get authentication options
+                const response1 = await fetch('/api/biometric/login/begin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: userId })
+                });
+
+                const data1 = await response1.json();
+                if (!data1.success) {
+                    throw new Error(data1.message);
+                }
+
+                showStatus('👆 Please authenticate with your device...', 'info');
+
+                // Step 2: Get assertion
+                const options = data1.options;
+                const publicKey = {
+                    ...options,
+                    challenge: base64urlToUint8Array(options.challenge),
+                    allowCredentials: options.allowCredentials.map(cred => ({
+                        ...cred,
+                        id: base64urlToUint8Array(cred.id)
+                    }))
+                };
+
+                const assertion = await navigator.credentials.get({ publicKey });
+
+                if (!assertion) {
+                    throw new Error('Authentication cancelled');
+                }
+
+                showStatus('✅ Verifying...', 'info');
+
+                // Step 3: Send to server
+                const assertionData = {
+                    id: assertion.id,
+                    rawId: uint8ArrayToBase64url(new Uint8Array(assertion.rawId)),
+                    type: assertion.type,
+                    response: {
+                        clientDataJSON: uint8ArrayToBase64url(new Uint8Array(assertion.response.clientDataJSON)),
+                        authenticatorData: uint8ArrayToBase64url(new Uint8Array(assertion.response.authenticatorData)),
+                        signature: uint8ArrayToBase64url(new Uint8Array(assertion.response.signature)),
+                        userHandle: assertion.response.userHandle ? 
+                            uint8ArrayToBase64url(new Uint8Array(assertion.response.userHandle)) : null
+                    }
+                };
+
+                const response2 = await fetch('/api/biometric/login/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ credential: assertionData })
+                });
+
+                const data2 = await response2.json();
+
+                if (data2.success) {
+                    showStatus('🎉 Biometric login successful!', 'success');
+                } else {
+                    throw new Error(data2.message);
+                }
+
+            } catch (error) {
+                showStatus('❌ Authentication failed: ' + error.message, 'error');
+            }
+        }
+
+        // Load Devices
+        async function loadDevices() {
+            try {
+                const response = await fetch('/api/biometric/devices');
+                const data = await response.json();
+
+                const deviceList = document.getElementById('deviceList');
+                
+                if (data.devices && data.devices.length > 0) {
+                    let html = '<h4 style="margin-bottom: 10px;">Registered Devices:</h4>';
+                    data.devices.forEach(device => {
+                        html += `
+                            <div class="device-item">
+                                <div class="device-info">
+                                    <div class="device-name">${device.device_name}</div>
+                                    <div class="device-date">Added: ${new Date(device.created_at).toLocaleDateString()}</div>
+                                </div>
+                                <button class="btn-remove" onclick="removeDevice('${device.credential_id}')">Remove</button>
+                            </div>
+                        `;
+                    });
+                    deviceList.innerHTML = html;
+                    deviceList.style.display = 'block';
+                } else {
+                    deviceList.innerHTML = '<p style="color: #999; text-align: center;">No devices registered yet</p>';
+                    deviceList.style.display = 'block';
+                }
+            } catch (error) {
+                showStatus('❌ Failed to load devices: ' + error.message, 'error');
+            }
+        }
+
+        // Remove Device
+        async function removeDevice(credentialId) {
+            if (!confirm('Remove this device?')) return;
+
+            try {
+                const response = await fetch(`/api/biometric/devices/${credentialId}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('✅ Device removed', 'success');
+                    loadDevices();
+                } else {
+                    showStatus('❌ Failed to remove device', 'error');
+                }
+            } catch (error) {
+                showStatus('❌ Error: ' + error.message, 'error');
+            }
+        }
+    </script>
+</body>
+</html>

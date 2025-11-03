@@ -1,0 +1,1683 @@
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_from_directory
+from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
+from datetime import datetime, timedelta
+from functools import wraps
+import mysql.connector
+from mysql.connector import pooling
+import os
+from dotenv import load_dotenv
+import uuid
+import anthropic
+import json
+import time
+import secrets
+import random
+from agora_token_builder import RtcTokenBuilder
+from routes.voice_routes import voice_bp
+from twilio_service import twilio_service
+
+# Load environment variables
+load_dotenv()
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'your-secret-key-here')
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
+
+# Agora Configuration
+AGORA_APP_ID = os.getenv('AGORA_APP_ID')
+AGORA_APP_CERTIFICATE = os.getenv('AGORA_APP_CERTIFICATE')
+# Debug: Print to verify
+print(f"🔑 AGORA_APP_ID: {AGORA_APP_ID}")
+print(f"🔑 AGORA_APP_CERTIFICATE: {AGORA_APP_CERTIFICATE}")
+
+# Ensure upload folder exists
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# CORS configuration - MUST BE BEFORE SocketIO
+from flask_cors import cross_origin
+
+CORS(app, 
+     origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:3001"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"],
+     supports_credentials=True,
+     expose_headers=["Content-Type"],
+     send_wildcard=False,  # ✅ CRITICAL!
+     always_send=True
+)
+
+
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:3001"],  # ✅ SPECIFIC ORIGINS! 
+    async_mode='threading',
+    logger=True,
+    engineio_logger=True,
+    ping_timeout=60,          # 60 seconds before timeout
+    ping_interval=25,         # Send ping every 25 seconds
+    max_http_buffer_size=1e8
+)
+
+# Database connection pool
+db_config = {
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'user': os.getenv('DB_USER', 'kaa_ho_user'),
+    'password': os.getenv('DB_PASSWORD', '123'),
+    'database': os.getenv('DB_NAME', 'kaa_ho'),
+    'pool_name': 'ca360_pool',
+    'pool_size': 10
+}
+
+try:
+    connection_pool = pooling.MySQLConnectionPool(**db_config)
+    print("✅ Database connection pool created successfully")
+except mysql.connector.Error as err:
+    print(f"❌ Error creating connection pool: {err}")
+    connection_pool = None
+
+def get_db_connection():
+    """Get a connection from the pool"""
+    if connection_pool:
+        return connection_pool.get_connection()
+    return None
+
+# Anthropic Claude API setup
+client = anthropic.Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+
+# Store active socket connections
+active_users = {}
+# ==================== REGISTER BLUEPRINTS ====================
+
+# Register new blueprints
+from routes.contacts_routes import contacts_bp
+from routes.google_auth_routes import google_auth_bp
+
+app.register_blueprint(contacts_bp)
+app.register_blueprint(google_auth_bp)
+app.register_blueprint(voice_bp)
+
+print("✅ Enhanced routes registered")
+# ==================== HELPER FUNCTIONS ====================
+
+def generate_otp():
+    """Generate 6-digit OTP"""
+    return str(random.randint(100000, 999999))
+
+def generate_session_token():
+    """Generate secure session token"""
+    return secrets.token_urlsafe(32)
+
+def verify_session_token(token):
+    """Verify session token and return user_id"""
+    if not token:
+        return None
+    
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT user_id FROM user_sessions 
+            WHERE session_token = %s AND expires_at > NOW()
+        """, (token,))
+        result = cursor.fetchone()
+        return result['user_id'] if result else None
+    except Exception as e:
+        print(f"❌ Error verifying session: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()
+
+# Login required decorator (supports both old session and new token auth)
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check old-style session first
+        if 'user_id' in session:
+            return f(*args, **kwargs)
+        
+        # Check new-style token auth
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_id = verify_session_token(token)
+        
+        if user_id:
+            # Store in session for backward compatibility
+            session['user_id'] = user_id
+            return f(*args, **kwargs)
+        
+        return jsonify({'error': 'Authentication required'}), 401
+    return decorated_function
+
+# ==================== WHATSAPP-STYLE AUTHENTICATION ====================
+
+@app.route('/api/auth/send-otp', methods=['POST'])
+def send_otp():
+    """Send OTP to phone number (WhatsApp-style)"""
+    data = request.json
+    phone = data.get('phone')
+    
+    if not phone:
+        return jsonify({'error': 'Phone number is required'}), 400
+    
+    # Format phone number
+    if not phone.startswith('+'):
+        phone = '+91' + phone  # Default to India
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # Generate OTP
+        otp = generate_otp()
+        expires_at = datetime.now() + timedelta(minutes=5)
+        
+        # Store OTP
+        cursor.execute("""
+            INSERT INTO otp_verifications (phone, otp, expires_at)
+            VALUES (%s, %s, %s)
+        """, (phone, otp, expires_at))
+        conn.commit()
+        
+        # Check if user exists
+        cursor.execute("SELECT id FROM users WHERE phone = %s", (phone,))
+        user_exists = cursor.fetchone() is not None
+        
+        # TODO: Send actual SMS here (Twilio, MSG91, etc.)
+        # For now, we'll just return the OTP in response (ONLY FOR DEVELOPMENT)
+        print(f"📱 OTP for {phone}: {otp}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'OTP sent successfully',
+            'user_exists': user_exists,
+            'otp': otp  # Remove this in production!
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error sending OTP: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/auth/verify-otp', methods=['POST'])
+def verify_otp():
+    """Verify OTP and create/login user (WhatsApp-style)"""
+    data = request.json
+    phone = data.get('phone')
+    otp = data.get('otp')
+    name = data.get('name')  # Optional for new users
+    
+    if not phone or not otp:
+        return jsonify({'error': 'Phone and OTP are required'}), 400
+    
+    # Format phone number
+    if not phone.startswith('+'):
+        phone = '+91' + phone
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # Verify OTP
+        cursor.execute("""
+            SELECT id FROM otp_verifications 
+            WHERE phone = %s AND otp = %s 
+            AND expires_at > NOW() AND verified = FALSE
+            ORDER BY created_at DESC LIMIT 1
+        """, (phone, otp))
+        
+        otp_record = cursor.fetchone()
+        if not otp_record:
+            return jsonify({'error': 'Invalid or expired OTP'}), 400
+        
+        # Mark OTP as verified
+        cursor.execute("""
+            UPDATE otp_verifications 
+            SET verified = TRUE 
+            WHERE id = %s
+        """, (otp_record['id'],))
+        
+        # Check if user exists
+        cursor.execute("SELECT * FROM users WHERE phone = %s", (phone,))
+        user = cursor.fetchone()
+        
+        if user:
+            # Existing user - login
+            user_id = user['id']
+            is_new_user = False
+        else:
+            # New user - register
+            if not name:
+                return jsonify({'error': 'Name is required for new users'}), 400
+            
+            cursor.execute("""
+                INSERT INTO users (phone, name, created_at)
+                VALUES (%s, %s, NOW())
+            """, (phone, name))
+            user_id = cursor.lastrowid
+            is_new_user = True
+            
+            # Fetch newly created user
+            cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+            user = cursor.fetchone()
+        
+        # Create session
+        session_token = generate_session_token()
+        expires_at = datetime.now() + timedelta(days=30)
+        
+        cursor.execute("""
+            INSERT INTO user_sessions (user_id, session_token, expires_at)
+            VALUES (%s, %s, %s)
+        """, (user_id, session_token, expires_at))
+        
+        conn.commit()
+        
+        # Also set Flask session for backward compatibility
+        session['user_id'] = user_id
+        
+        return jsonify({
+            'success': True,
+            'session_token': session_token,
+            'is_new_user': is_new_user,
+            'user': {
+                'id': user['id'],
+                'phone': user['phone'],
+                'name': user['name'],
+                'profile_picture': user['profile_picture'],
+                'status_message': user['status_message']
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error verifying OTP: {e}")
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/auth/session', methods=['GET'])
+def get_session():
+    """Get current user session"""
+    # Check Flask session first
+    if 'user_id' in session:
+        user_id = session['user_id']
+    else:
+        # Check token
+        token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        user_id = verify_session_token(token)
+    
+    if not user_id:
+        return jsonify({'error': 'Invalid or expired session'}), 401
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        return jsonify({
+            'user': {
+                'id': user['id'],
+                'phone': user['phone'],
+                'name': user['name'],
+                'profile_picture': user['profile_picture'],
+                'status_message': user['status_message']
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting session: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    """Logout user"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    
+    if token:
+        conn = get_db_connection()
+        if conn:
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM user_sessions WHERE session_token = %s", (token,))
+                conn.commit()
+                cursor.close()
+                conn.close()
+            except Exception as e:
+                print(f"❌ Error logging out: {e}")
+    
+    # Clear Flask session
+    session.clear()
+    
+    return jsonify({'success': True}), 200
+
+# ==================== LEGACY AUTHENTICATION (OLD ENDPOINTS) ====================
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    """User registration (Legacy - kept for backward compatibility)"""
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        email = data.get('email')
+        password = data.get('password')
+        phone = data.get('phone')
+        
+        if not all([username, email, password]):
+            return jsonify({'error': 'Missing required fields'}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+            
+        cursor = conn.cursor(dictionary=True)
+        
+        # Check if user exists (by email or phone)
+        if email:
+            cursor.execute('SELECT id FROM users WHERE email = %s', (email,))
+            if cursor.fetchone():
+                cursor.close()
+                conn.close()
+                return jsonify({'error': 'Email already registered'}), 400
+        
+        if phone:
+            if not phone.startswith('+'):
+                phone = '+91' + phone
+            cursor.execute('SELECT id FROM users WHERE phone = %s', (phone,))
+            if cursor.fetchone():
+                cursor.close()
+                conn.close()
+                return jsonify({'error': 'Phone already registered'}), 400
+        
+        # Create user with both old and new fields
+        cursor.execute("""
+            INSERT INTO users (name, phone, created_at)
+            VALUES (%s, %s, NOW())
+        """, (username, phone))
+        
+        conn.commit()
+        user_id = cursor.lastrowid
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'message': 'Registration successful',
+            'user_id': user_id
+        }), 201
+        
+    except Exception as e:
+        print(f"Registration error: {str(e)}")
+        return jsonify({'error': 'Registration failed'}), 500
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    """User login (Legacy - kept for backward compatibility)"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        phone = data.get('phone')
+        password = data.get('password')
+        
+        if not (email or phone):
+            return jsonify({'error': 'Email or phone required'}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+            
+        cursor = conn.cursor(dictionary=True)
+        
+        # Find user
+        if email:
+            cursor.execute('SELECT * FROM users WHERE email = %s', (email,))
+        else:
+            if not phone.startswith('+'):
+                phone = '+91' + phone
+            cursor.execute('SELECT * FROM users WHERE phone = %s', (phone,))
+        
+        user = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # For old password-based users (if password field exists)
+        # For WhatsApp-style users, this won't work - they need OTP
+        
+        session['user_id'] = user['id']
+        
+        return jsonify({
+            'message': 'Login successful',
+            'user': {
+                'id': user['id'],
+                'phone': user['phone'],
+                'name': user['name'],
+                'profile_picture': user['profile_picture']
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"Login error: {str(e)}")
+        return jsonify({'error': 'Login failed'}), 500
+
+# ==================== AGORA TOKEN GENERATION ====================
+
+@app.route('/api/agora/token', methods=['POST', 'OPTIONS'])
+def get_agora_token():
+    # Handle preflight
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'POST,OPTIONS')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response, 200
+    
+    # Rest of your existing code...
+    
+    """Generate Agora RTC token for audio/video calls (Frontend API)"""
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'ok'})
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:3000')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'POST,OPTIONS')
+        return response
+    
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        receiver_id = data.get('receiver_id')
+        call_type = data.get('call_type', 'voice')  # NEW - ADD THIS LINE
+        
+        if not user_id:
+            return jsonify({'error': 'User ID is required'}), 400
+        
+        if not AGORA_APP_ID:
+            return jsonify({'error': 'Agora App ID not configured'}), 500
+        
+        # Create unique channel name
+        channel_name = f"call_{min(user_id, receiver_id)}_{max(user_id, receiver_id)}_{int(time.time())}"
+        uid = user_id  # Use user_id as Agora UID
+        
+        # Check if we're in Testing Mode (no certificate) or Secure Mode (with certificate)
+        if AGORA_APP_CERTIFICATE and AGORA_APP_CERTIFICATE.strip():
+            # SECURE MODE: Generate token with certificate
+            print(f"🔐 [AGORA] Using SECURE MODE with certificate")
+            
+            expiration_time_in_seconds = 86400  # 24 hours
+            current_timestamp = int(time.time())
+            privilege_expired_ts = current_timestamp + expiration_time_in_seconds
+            role = 1  # PUBLISHER
+            
+            token = RtcTokenBuilder.buildTokenWithUid(
+                AGORA_APP_ID,
+                AGORA_APP_CERTIFICATE,
+                channel_name,
+                uid,
+                role,
+                privilege_expired_ts
+            )
+            
+            print(f"✅ [AGORA] Generated SECURE token for user {user_id} -> channel: {channel_name}")
+        else:
+            # TESTING MODE: No token needed, just return App ID
+            print(f"🧪 [AGORA] Using TESTING MODE (no certificate)")
+            token = None  # In testing mode, frontend will use App ID only
+            print(f"✅ [AGORA] Testing mode enabled for user {user_id} -> channel: {channel_name}")
+        
+        return jsonify({
+            'token': token,
+            'channel': channel_name,
+            'uid': uid,
+            'appId': AGORA_APP_ID,
+            'call_type': call_type,  # NEW - ADD THIS LINE
+            'testing_mode': not bool(AGORA_APP_CERTIFICATE and AGORA_APP_CERTIFICATE.strip())
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ [AGORA] Error generating token: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/generate_agora_token', methods=['POST'])
+@login_required
+def generate_agora_token():
+    """Generate Agora RTC token for audio/video calls (Legacy endpoint)"""
+    try:
+        data = request.get_json()
+        channel_name = data.get('channelName')
+        uid = data.get('uid', 0)  # 0 means Agora will assign a random uid
+        
+        if not channel_name:
+            return jsonify({'error': 'Channel name is required'}), 400
+        
+        if not AGORA_APP_ID or not AGORA_APP_CERTIFICATE:
+            return jsonify({'error': 'Agora credentials not configured'}), 500
+        
+        # Token expires in 24 hours (86400 seconds)
+        expiration_time_in_seconds = 86400
+        current_timestamp = int(time.time())
+        privilege_expired_ts = current_timestamp + expiration_time_in_seconds
+        
+        # Role: 1 = PUBLISHER (can publish and subscribe)
+        role = 1
+        
+        # Generate the token
+        token = RtcTokenBuilder.buildTokenWithUid(
+            AGORA_APP_ID,
+            AGORA_APP_CERTIFICATE,
+            channel_name,
+            uid,
+            role,
+            privilege_expired_ts
+        )
+        
+        print(f"✅ Generated Agora token for channel: {channel_name}, uid: {uid}")
+        
+        return jsonify({
+            'success': True,
+            'token': token,
+            'appId': AGORA_APP_ID,
+            'channelName': channel_name,
+            'uid': uid,
+            'expiresAt': privilege_expired_ts
+        })
+        
+    except Exception as e:
+        print(f"❌ Error generating Agora token: {str(e)}")
+        return jsonify({'error': 'Failed to generate token', 'details': str(e)}), 500
+
+# ==================== USER ROUTES ====================
+
+@app.route('/api/users/<int:user_id>', methods=['GET'])
+@login_required
+def get_user(user_id):
+    """Get user by ID"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        return jsonify({
+            'id': user['id'],
+            'phone': user['phone'],
+            'name': user['name'],
+            'profile_picture': user['profile_picture'],
+            'status_message': user['status_message'],
+            'is_online': user['is_online'],
+            'last_seen': user['last_seen'].isoformat() if user['last_seen'] else None
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting user: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
+@login_required
+def update_user(user_id):
+    """Update user profile"""
+    current_user_id = session.get('user_id')
+    
+    if not current_user_id or current_user_id != user_id:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    data = request.json
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = conn.cursor()
+        
+        updates = []
+        params = []
+        
+        if 'name' in data:
+            updates.append("name = %s")
+            params.append(data['name'])
+        
+        if 'status_message' in data:
+            updates.append("status_message = %s")
+            params.append(data['status_message'])
+        
+        if 'profile_picture' in data:
+            updates.append("profile_picture = %s")
+            params.append(data['profile_picture'])
+        
+        if not updates:
+            return jsonify({'error': 'No fields to update'}), 400
+        
+        params.append(user_id)
+        query = f"UPDATE users SET {', '.join(updates)} WHERE id = %s"
+        
+        cursor.execute(query, params)
+        conn.commit()
+        
+        return jsonify({'success': True}), 200
+        
+    except Exception as e:
+        print(f"❌ Error updating user: {e}")
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+# ==================== CONTACTS ROUTES ====================
+
+@app.route('/api/contacts', methods=['GET'])
+@login_required
+def get_contacts():
+    """Get user's contacts"""
+    user_id = session.get('user_id')
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT u.* FROM users u
+            INNER JOIN contacts c ON u.id = c.contact_id
+            WHERE c.user_id = %s
+            ORDER BY u.name
+        """, (user_id,))
+        
+        contacts = cursor.fetchall()
+        
+        return jsonify({
+            'contacts': [{
+                'id': c['id'],
+                'phone': c['phone'],
+                'name': c['name'],
+                'profile_picture': c['profile_picture'],
+                'status_message': c['status_message'],
+                'is_online': c['is_online'],
+                'last_seen': c['last_seen'].isoformat() if c['last_seen'] else None
+            } for c in contacts]
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error getting contacts: {e}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+
+@app.route('/api/contacts', methods=['POST'])
+@login_required
+def add_contact():
+    """Add contact by phone number"""
+    user_id = session.get('user_id')
+    data = request.json
+    phone = data.get('phone')
+    
+    if not phone:
+        return jsonify({'error': 'Phone number is required'}), 400
+    
+    # Format phone number
+    if not phone.startswith('+'):
+        phone = '+91' + phone
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+    
+    try:
+        cursor = conn.cursor(dictionary=True)
+        
+        # Find user by phone
+        cursor.execute("SELECT id FROM users WHERE phone = %s", (phone,))
+        contact = cursor.fetchone()
+        
+        if not contact:
+            return jsonify({'error': 'User not found with this phone number'}), 404
+        
+        contact_id = contact['id']
+        
+        if contact_id == user_id:
+            return jsonify({'error': 'Cannot add yourself as contact'}), 400
+        
+        # Check if already a contact
+        cursor.execute("""
+            SELECT id FROM contacts 
+            WHERE user_id = %s AND contact_id = %s
+        """, (user_id, contact_id))
+        
+        if cursor.fetchone():
+            return jsonify({'error': 'Contact already exists'}), 400
+        
+        # Add contact
+        cursor.execute("""
+            INSERT INTO contacts (user_id, contact_id)
+            VALUES (%s, %s)
+        """, (user_id, contact_id))
+        conn.commit()
+        
+        return jsonify({'success': True, 'contact_id': contact_id}), 200
+        
+    except Exception as e:
+        print(f"❌ Error adding contact: {e}")
+        conn.rollback()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        cursor.close()
+        conn.close()
+@app.route('/api/contacts/check-registered', methods=['POST'])
+@login_required
+def check_registered_contacts():
+    """Check which phone numbers from user's phone are registered"""
+    user_id = session.get('user_id')
+    data = request.json
+    phone_numbers = data.get('phone_numbers', [])
+    
+    if not phone_numbers:
+        return jsonify({'error': 'No phone numbers provided'}), 400
+    
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor(dictionary=True)
+        
+        # Check which numbers are registered
+        placeholders = ','.join(['%s'] * len(phone_numbers))
+        query = f"""
+            SELECT phone, name, id, profile_picture
+            FROM users
+            WHERE phone IN ({placeholders})
+        """
+        
+        cursor.execute(query, phone_numbers)
+        registered_users = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # Create sets for comparison
+        registered_phones = {user['phone'] for user in registered_users}
+        not_registered = [phone for phone in phone_numbers if phone not in registered_phones]
+        
+        return jsonify({
+            'success': True,
+            'registered': registered_users,
+            'not_registered': not_registered,
+            'total_checked': len(phone_numbers),
+            'total_registered': len(registered_users),
+            'total_not_registered': len(not_registered)
+        })
+        
+    except Exception as e:
+        print(f"❌ Error checking registered contacts: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/invites/send', methods=['POST'])
+@login_required
+def send_invite():
+    """Track invite sent to non-user"""
+    user_id = session.get('user_id')
+    data = request.json
+    invited_phone = data.get('phone')
+    
+    if not invited_phone:
+        return jsonify({'error': 'Phone number required'}), 400
+    
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor()
+        
+        # Create invites table if not exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS invites (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                inviter_user_id INT NOT NULL,
+                invited_phone VARCHAR(20) NOT NULL,
+                invited_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                joined BOOLEAN DEFAULT FALSE,
+                joined_at TIMESTAMP NULL,
+                FOREIGN KEY (inviter_user_id) REFERENCES users(id),
+                INDEX idx_invited_phone (invited_phone)
+            )
+        """)
+        
+        # Insert invite record
+        cursor.execute("""
+            INSERT INTO invites (inviter_user_id, invited_phone)
+            VALUES (%s, %s)
+        """, (user_id, invited_phone))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Invite tracked successfully'
+        })
+        
+    except Exception as e:
+        print(f"❌ Error tracking invite: {e}")
+        return jsonify({'error': str(e)}), 500   
+@app.route('/api/contacts/auto-discover', methods=['POST'])
+@login_required
+def auto_discover_contacts():
+    """Auto-discover and add contacts that are registered on the app"""
+    user_id = session.get('user_id')
+    data = request.json
+    phone_numbers = data.get('phone_numbers', [])
+    
+    if not phone_numbers:
+        return jsonify({'error': 'No phone numbers provided'}), 400
+    
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor(dictionary=True)
+        
+        # Find all registered users from the phone list
+        placeholders = ','.join(['%s'] * len(phone_numbers))
+        query = f"""
+            SELECT id, phone, name, profile_picture, status_message, 
+                   is_online, last_seen
+            FROM users
+            WHERE phone IN ({placeholders}) AND id != %s
+        """
+                
+        # Combine phone_numbers list with user_id as tuple
+        params = tuple(phone_numbers) + (user_id,)
+        cursor.execute(query, params)
+        registered_users = cursor.fetchall()
+
+        print(f"🔍 Found {len(registered_users)} registered users")
+        # Auto-add these users as contacts if not already added
+        added_count = 0
+        for contact_user in registered_users:
+            contact_id = contact_user['id']
+            
+            # Check if already a contact
+            cursor.execute("""
+                SELECT id FROM contacts 
+                WHERE user_id = %s AND contact_id = %s
+            """, (user_id, contact_id))
+            
+            if not cursor.fetchone():
+                # Add as contact automatically
+                cursor.execute("""
+                    INSERT INTO contacts (user_id, contact_id, created_at)
+                    VALUES (%s, %s, NOW())
+                """, (user_id, contact_id))
+                added_count += 1
+        
+        conn.commit()
+        
+        # Get all contacts now (including newly added)
+        cursor.execute("""
+            SELECT u.id, u.phone, u.name, u.profile_picture, 
+                   u.status_message, u.is_online, u.last_seen
+            FROM users u
+            INNER JOIN contacts c ON u.id = c.contact_id
+            WHERE c.user_id = %s
+            ORDER BY u.name
+        """, (user_id,))
+        
+        all_contacts = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'success': True,
+            'contacts': all_contacts,
+            'new_contacts_added': added_count,
+            'total_registered': len(registered_users),
+            'message': f'Found {len(registered_users)} contacts on CA360 Chat!'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in auto-discover: {e}")
+        return jsonify({'error': str(e)}), 500
+
+## 📍 EXACT LOCATION:
+# ==================== MESSAGES ROUTES ====================
+
+@app.route('/api/messages/<int:user_id>', methods=['GET'])
+@login_required
+def get_messages(user_id):
+    """Get messages between current user and specified user"""
+    current_user_id = session.get('user_id')
+    
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'error': 'Database connection failed'}), 500
+        
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute('''
+            SELECT m.*, u.name as sender_name, u.profile_picture as sender_picture
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE (m.sender_id = %s AND m.receiver_id = %s)
+               OR (m.sender_id = %s AND m.receiver_id = %s)
+            ORDER BY m.sent_at ASC
+        ''', (current_user_id, user_id, user_id, current_user_id))
+        
+        messages = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({'messages': messages}), 200
+        
+    except Exception as e:
+        print(f"Error getting messages: {str(e)}")
+        return jsonify({'error': 'Failed to get messages'}), 500
+@app.route('/api/messages', methods=['POST'])
+@login_required
+def send_message_api():
+    """Professional message sending: REST API + Socket.io hybrid"""
+    try:
+        sender_id = session.get('user_id')
+        if not sender_id:
+            return jsonify({'error': 'Not authenticated'}), 401
+        
+        data = request.get_json()
+        receiver_id = data.get('receiver_id')
+        content = data.get('content')
+        message_type = data.get('type', 'text')
+        file_url = data.get('file_url')
+        
+        if not receiver_id or not content:
+            return jsonify({'error': 'Receiver and content required'}), 400
+        
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'error': 'Database connection failed'}), 500
+        
+        cursor = conn.cursor(dictionary=True)
+        
+        # Generate unique message ID
+        import uuid
+        message_id = str(uuid.uuid4())
+        
+        # Insert message into database (PERSISTENCE!)
+        cursor.execute("""
+            INSERT INTO messages (
+                message_id, sender_id, receiver_id, 
+                message_type, content, file_url,
+                is_sent, sent_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, 1, NOW())
+        """, (message_id, sender_id, receiver_id, message_type, content, file_url))
+        
+        conn.commit()
+        
+        # Get the complete message with sender info
+        cursor.execute("""
+            SELECT m.*, u.name as sender_name, u.profile_picture as sender_picture
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE m.message_id = %s
+        """, (message_id,))
+        
+        message = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+        
+        if not message:
+            return jsonify({'error': 'Failed to retrieve message'}), 500
+        
+        # Format message for response
+        formatted_message = {
+            'id': message['message_id'],
+            'sender_id': message['sender_id'],
+            'senderId': str(message['sender_id']),
+            'receiverId': str(message['receiver_id']),
+            'content': message['content'],
+            'type': message['message_type'],
+            'file_url': message.get('file_url'),
+            'sentAt': message['sent_at'].isoformat() if message.get('sent_at') else None,
+            'senderName': message.get('sender_name'),
+            'senderPicture': message.get('sender_picture'),
+            'isRead': bool(message.get('is_read', 0)),
+            'isDelivered': bool(message.get('is_delivered', 0))
+        }
+        
+        # Real-time delivery via Socket.io
+        try:
+            socketio.emit('new_message', formatted_message, room=f'user_{receiver_id}')
+            print(f"📨 Message sent: {sender_id} → {receiver_id}")
+        except Exception as socket_error:
+            print(f"⚠️ Socket.io emit failed (message still saved): {socket_error}")
+        
+        return jsonify({
+            'success': True,
+            'message': formatted_message
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error sending message: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500    
+
+# ==================== FILE UPLOAD ====================
+
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'pdf', 'doc', 'docx', 'txt', 'mp3', 'wav', 'mp4', 'mov'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/api/upload', methods=['POST'])
+@login_required
+def upload_file():
+    """Upload a file"""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'File type not allowed'}), 400
+    
+    try:
+        # Generate unique filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        user_id = session.get('user_id')
+        filename = f"{user_id}_{timestamp}_{secure_filename(file.filename)}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        # Save file
+        file.save(filepath)
+        
+        # Save to database
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO files (user_id, filename, filepath, uploaded_at)
+                VALUES (%s, %s, %s, NOW())
+            """, (user_id, file.filename, filename))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        
+        return jsonify({
+            'success': True,
+            'url': f'/api/files/{filename}'
+        }), 200
+        
+    except Exception as e:
+        print(f"Upload error: {str(e)}")
+        return jsonify({'error': 'Upload failed'}), 500
+
+@app.route('/api/files/<filename>')
+def get_file(filename):
+    """Serve uploaded file"""
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+# ==================== CLAUDE AI CHAT ====================
+
+@app.route('/api/claude/chat', methods=['POST'])
+@login_required
+def claude_chat():
+    """Chat with Claude AI"""
+    try:
+        data = request.get_json()
+        user_message = data.get('message', '')
+        conversation_history = data.get('history', [])
+        
+        if not user_message:
+            return jsonify({'error': 'Message is required'}), 400
+        
+        # Build messages for Claude API
+        messages = []
+        for msg in conversation_history:
+            messages.append({
+                "role": msg['role'],
+                "content": msg['content']
+            })
+        
+        messages.append({
+            "role": "user",
+            "content": user_message
+        })
+        
+        # Call Claude API
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=8096,
+            messages=messages
+        )
+        
+        assistant_message = response.content[0].text
+        
+        return jsonify({
+            'success': True,
+            'response': assistant_message
+        })
+        
+    except Exception as e:
+        print(f"Claude API error: {str(e)}")
+        return jsonify({'error': 'Failed to get response from Claude'}), 500
+
+# ==================== SOCKET.IO EVENTS ====================
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection"""
+    print(f"🔌 Client connected: {request.sid}")
+    
+    if 'user_id' in session:
+        user_id = session['user_id']
+        join_room(f'user_{user_id}')
+        active_users[user_id] = request.sid
+        
+        # Update user online status
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET is_online = TRUE WHERE id = %s', (user_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        
+        print(f"✅ User {user_id} connected")
+        emit('connected', {'user_id': user_id})
+
+    return True  # ✅ CRITICAL FIX    
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection"""
+    print(f"🔌 Client disconnected: {request.sid}")
+    
+    # Remove from active users
+    user_id = None
+    for uid, sid in list(active_users.items()):
+        if sid == request.sid:
+            user_id = uid
+            del active_users[uid]
+            break
+    
+    if user_id:
+        # Update user offline status
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE users SET is_online = FALSE, last_seen = %s WHERE id = %s', 
+                         (datetime.now(), user_id))
+            conn.commit()
+            cursor.close()
+            conn.close()
+    print(f"❌ User {user_id} disconnected")
+        
+    return True  # ✅ CRITICAL FIX    
+       
+    
+@socketio.on('user_connected')
+def handle_user_connected(data):
+    """Handle user connection event"""
+    user_id = data.get('userId')
+    
+    if not user_id:
+        return
+    
+    print(f"👤 User connected: {user_id}")
+    active_users[user_id] = request.sid
+    join_room(f'user_{user_id}')
+    
+    # Update online status
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE users 
+                SET is_online = TRUE, last_seen = NOW()
+                WHERE id = %s
+            """, (user_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Notify contacts
+            emit('user_status_change', {
+                'userId': user_id,
+                'isOnline': True
+            }, broadcast=True)
+            
+        except Exception as e:
+            print(f"❌ Error updating online status: {e}")
+
+@socketio.on('send_message')
+def handle_send_message(data):
+    """Handle sending a message"""
+    try:
+        sender_id = session.get('user_id') or data.get('senderId')
+        if not sender_id:
+            emit('message_error', {'error': 'Not authenticated'})
+            return
+        
+        receiver_id = data.get('receiver_id') or data.get('receiverId')
+        content = data.get('content')
+        message_type = data.get('type', 'text')
+        file_url = data.get('file_url')
+        
+        conn = get_db_connection()
+        if not conn:
+            emit('message_error', {'error': 'Database connection failed'})
+            return
+            
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute('''
+            INSERT INTO messages (sender_id, receiver_id, content, type, file_url, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        ''', (sender_id, receiver_id, content, message_type, file_url, datetime.now()))
+        
+        conn.commit()
+        message_id = cursor.lastrowid
+        
+        # Get complete message data
+        cursor.execute('''
+            SELECT m.*, u.name as sender_name, u.profile_picture as sender_picture
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE m.id = %s
+        ''', (message_id,))
+        
+        message = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        # Format message
+        formatted_message = {
+            'id': message['id'],
+            'senderId': message['sender_id'],
+            'receiverId': message['receiver_id'],
+            'content': message['content'],
+            'type': message['type'],
+            'file_url': message.get('file_url'),
+            'sentAt': message['created_at'].isoformat() if message.get('created_at') else None,
+            'senderName': message.get('sender_name'),
+            'senderPicture': message.get('sender_picture')
+        }
+        
+        # Send to both sender and receiver
+        emit('new_message', formatted_message, room=f'user_{sender_id}')
+        
+        if receiver_id in active_users:
+            socketio.emit('new_message', formatted_message, room=active_users[receiver_id])
+        
+        # Confirm to sender
+        emit('message_sent', formatted_message)
+        
+    except Exception as e:
+        print(f"Error sending message: {str(e)}")
+        emit('message_error', {'error': str(e)})
+
+@socketio.on('initiate_call')
+def handle_initiate_call(data):
+    """Handle call initiation"""
+    try:
+        caller_id = session.get('user_id')
+        if not caller_id:
+            return
+        
+        receiver_id = data.get('receiver_id')
+        call_type = data.get('call_type')
+        channel_name = data.get('channel_name')
+        agora_token = data.get('agora_token')
+        agora_app_id = data.get('agora_app_id')
+        
+        # Get caller info
+        conn = get_db_connection()
+        if conn:
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute('SELECT name, profile_picture FROM users WHERE id = %s', (caller_id,))
+            caller = cursor.fetchone()
+            cursor.close()
+            conn.close()
+        
+        call_data = {
+            'caller_id': caller_id,
+            'caller_name': caller.get('name') if caller else 'Unknown',
+            'caller_picture': caller.get('profile_picture') if caller else None,
+            'call_type': call_type,
+            'channel_name': channel_name,
+            'agora_token': agora_token,
+            'agora_app_id': agora_app_id,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Send to receiver
+        emit('incoming_call', call_data, room=f'user_{receiver_id}')
+        print(f"📞 Call initiated from {caller_id} to {receiver_id}")
+        
+    except Exception as e:
+        print(f"Error initiating call: {str(e)}")
+@socketio.on('initiate_call')
+def handle_initiate_call(data):
+    """Handle call initiation and notify target user"""
+    try:
+        caller_id = session.get('user_id')
+        target_user = data.get('target_user')
+        call_type = data.get('call_type', 'voice')
+        channel_name = data.get('channel_name')
+        
+        print(f'📞 Call initiated: User {caller_id} → User {target_user}')
+        
+        # Get caller info
+        # Get caller info
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute('SELECT name, profile_picture FROM users WHERE id = %s', (caller_id,))
+        caller = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        # Notify target user
+        socketio.emit('incoming_call', {
+            'caller_id': caller_id,
+            'caller_name': caller.get('name', 'Unknown'),
+            'caller_picture': caller.get('profile_picture'),
+            'call_type': call_type,
+            'channel_name': channel_name
+        }, to=f'user_{target_user}')
+        
+        print(f'✅ Call notification sent to user {target_user}')
+        
+    except Exception as e:
+        print(f'❌ Error handling call initiation: {e}')
+@socketio.on('initiate_video_call')
+def handle_initiate_video_call(data):
+    """Handle video call initiation and notify target user"""
+    try:
+        caller_id = session.get('user_id')
+        target_user = data.get('target_user')
+        channel_name = data.get('channel_name')
+        
+        print(f'📹 Video call initiated: User {caller_id} → User {target_user}')
+        
+        # Get caller info from database
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute('SELECT name, profile_picture FROM users WHERE id = %s', (caller_id,))
+        caller = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        # Notify target user about incoming VIDEO call
+        socketio.emit('incoming_call', {
+            'caller_id': caller_id,
+            'caller_name': caller.get('name', 'Unknown'),
+            'caller_picture': caller.get('profile_picture'),
+            'call_type': 'video',
+            'channel_name': channel_name
+        }, to=f'user_{target_user}')
+        
+        print(f'✅ Video call notification sent to user {target_user}')
+        
+    except Exception as e:
+        print(f'❌ Error handling video call initiation: {e}')
+        import traceback
+        traceback.print_exc()        
+
+@socketio.on('accept_call')
+def handle_accept_call(data):
+    """Handle call acceptance"""
+    try:
+        caller_id = data.get('caller_id')
+        receiver_id = session.get('user_id')
+        
+        if not receiver_id:
+            return
+        
+        # Notify caller that call was accepted
+        emit('call_accepted', {
+            'receiver_id': receiver_id,
+            'timestamp': datetime.now().isoformat()
+        }, room=f'user_{caller_id}')
+        
+        print(f"✅ Call accepted by {receiver_id}")
+        
+    except Exception as e:
+        print(f"Error accepting call: {str(e)}")
+
+@socketio.on('reject_call')
+def handle_reject_call(data):
+    """Handle call rejection"""
+    try:
+        caller_id = data.get('caller_id')
+        receiver_id = session.get('user_id')
+        
+        if not receiver_id:
+            return
+        
+        # Notify caller that call was rejected
+        emit('call_rejected', {
+            'receiver_id': receiver_id,
+            'timestamp': datetime.now().isoformat()
+        }, room=f'user_{caller_id}')
+        
+        print(f"❌ Call rejected by {receiver_id}")
+        
+    except Exception as e:
+        print(f"Error rejecting call: {str(e)}")
+
+@socketio.on('end_call')
+def handle_end_call(data):
+    """Handle call ending"""
+    try:
+        user_id = session.get('user_id')
+        other_user_id = data.get('other_user_id')
+        
+        if not user_id:
+            return
+        
+        # Notify other user that call ended
+        emit('call_ended', {
+            'ended_by': user_id,
+            'timestamp': datetime.now().isoformat()
+        }, room=f'user_{other_user_id}')
+        
+        print(f"🔚 Call ended by {user_id}")
+        
+    except Exception as e:
+        print(f"Error ending call: {str(e)}")
+
+# ==================== HEALTH CHECK ====================
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'agora': bool(AGORA_APP_ID and AGORA_APP_CERTIFICATE),
+        'claude': bool(client)
+    }), 200
+# ==================== SOCKET.IO EVENT HANDLERS ====================
+
+@socketio.on('user_connected')
+def handle_user_connected(data):
+    """Handle user connection event"""
+    user_id = data.get('userId')
+    
+    if not user_id:
+        return
+    
+    print(f"👤 User connected: {user_id}")
+    join_room(f'user_{user_id}')
+    
+    # Update online status
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE users 
+                SET is_online = TRUE, last_seen = NOW()
+                WHERE id = %s
+            """, (user_id,))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            # Broadcast online status to all users
+            socketio.emit('user_status_change', {
+                'userId': user_id,
+                'isOnline': True
+            }, to='/')  # Broadcast to all connected clients
+            
+            print(f"✅ User {user_id} is now ONLINE")
+            
+        except Exception as e:
+            print(f"❌ Error updating online status: {e}")
+
+
+@socketio.on('send_message')
+def handle_send_message_socket(data):
+    """Handle real-time message sending via Socket.IO"""
+    try:
+        sender_id = session.get('user_id')
+        if not sender_id:
+            print("❌ No user_id in session")
+            emit('message_error', {'error': 'Not authenticated'})
+            return
+        
+        receiver_id = data.get('receiver_id') or data.get('receiverId')
+        content = data.get('content')
+        message_type = data.get('type', 'text')
+        
+        if not receiver_id or not content:
+            print("❌ Missing receiver_id or content")
+            emit('message_error', {'error': 'Missing required fields'})
+            return
+        
+        print(f"📨 Message: User {sender_id} → User {receiver_id}")
+        
+        conn = get_db_connection()
+        if not conn:
+            emit('message_error', {'error': 'Database connection failed'})
+            return
+        
+        cursor = conn.cursor(dictionary=True)
+        
+        # Generate unique message ID
+        import uuid
+        message_id = str(uuid.uuid4())
+        
+        # Insert message into database
+        cursor.execute("""
+            INSERT INTO messages (
+                message_id, sender_id, receiver_id, 
+                message_type, content,
+                is_sent, sent_at
+            ) VALUES (%s, %s, %s, %s, %s, 1, NOW())
+        """, (message_id, sender_id, receiver_id, message_type, content))
+        
+        conn.commit()
+        
+        # Get the complete message with sender info
+        cursor.execute("""
+            SELECT m.*, u.name as sender_name, u.profile_picture as sender_picture
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE m.message_id = %s
+        """, (message_id,))
+        
+        message = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+        
+        if not message:
+            emit('message_error', {'error': 'Failed to retrieve message'})
+            return
+        
+        # Format message
+        formatted_message = {
+            'id': message['message_id'],
+            'sender_id': message['sender_id'],
+            'senderId': str(message['sender_id']),
+            'receiverId': str(message['receiver_id']),
+            'content': message['content'],
+            'type': message['message_type'],
+            'sentAt': message['sent_at'].isoformat() if message.get('sent_at') else None,
+            'senderName': message.get('sender_name'),
+            'senderPicture': message.get('sender_picture'),
+            'isRead': False,
+            'isDelivered': True
+        }
+        
+        # CRITICAL: Emit to BOTH sender and receiver rooms
+        print(f"[SOCKET] Emitting to room user_{receiver_id}")
+        socketio.emit('new_message', formatted_message, room=f'user_{receiver_id}')
+        
+        print(f"[SOCKET] Emitting to room user_{sender_id}")
+        socketio.emit('new_message', formatted_message, room=f'user_{sender_id}')
+        
+        # Confirm to sender
+        emit('message_sent', formatted_message)
+        
+        print(f"✅ Message delivered!")
+        
+    except Exception as e:
+        print(f"❌ Error in socket message: {e}")
+        import traceback
+        traceback.print_exc()
+        emit('message_error', {'error': str(e)})
+# ==================== MAIN ====================
+
+if __name__ == '__main__':
+    print("🚀 Starting CA360 Chat server...")
+    print(f"✅ AGORA_APP_ID: {'Configured' if AGORA_APP_ID else 'Missing'}")
+    print(f"✅ AGORA_APP_CERTIFICATE: {'Configured' if AGORA_APP_CERTIFICATE else 'Missing'}")
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)

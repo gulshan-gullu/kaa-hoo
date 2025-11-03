@@ -1,0 +1,270 @@
+# Alert rules for KAA HO Chat Application
+
+groups:
+  # ==================== SYSTEM ALERTS ====================
+  - name: system_alerts
+    interval: 30s
+    rules:
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: cpu_usage_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is {{ $value }}% (threshold: 80%)"
+          action: "Check for resource-intensive processes"
+      
+      # Critical CPU usage
+      - alert: CriticalCPUUsage
+        expr: cpu_usage_percent > 95
+        for: 2m
+        labels:
+          severity: critical
+          category: performance
+        annotations:
+          summary: "CRITICAL: CPU usage near maximum"
+          description: "CPU usage is {{ $value }}% - immediate action required"
+          action: "Scale up servers or optimize code immediately"
+      
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: (memory_usage_bytes / 1024 / 1024 / 1024) > 1.5
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is {{ $value }}GB"
+          action: "Check for memory leaks"
+      
+      # Critical memory usage
+      - alert: CriticalMemoryUsage
+        expr: (memory_usage_bytes / 1024 / 1024 / 1024) > 3
+        for: 2m
+        labels:
+          severity: critical
+          category: performance
+        annotations:
+          summary: "CRITICAL: Memory nearly exhausted"
+          description: "Memory usage is {{ $value }}GB - server may crash"
+          action: "Restart application or scale immediately"
+
+  # ==================== APPLICATION ALERTS ====================
+  - name: application_alerts
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: rate(errors_total[5m]) > 10
+        for: 3m
+        labels:
+          severity: critical
+          category: application
+        annotations:
+          summary: "High error rate detected"
+          description: "{{ $value }} errors per second"
+          action: "Check application logs immediately"
+      
+      # Application down
+      - alert: ApplicationDown
+        expr: up{job="kaa-ho-chat"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: application
+        annotations:
+          summary: "🚨 APPLICATION DOWN"
+          description: "KAA HO Chat application is not responding"
+          action: "Restart application immediately"
+      
+      # Slow response time
+      - alert: SlowResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Slow API response time"
+          description: "95th percentile response time: {{ $value }}s"
+          action: "Optimize slow endpoints or scale up"
+      
+      # Very slow response time
+      - alert: VerySlowResponseTime
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+          category: performance
+        annotations:
+          summary: "CRITICAL: Very slow response times"
+          description: "95th percentile response time: {{ $value }}s"
+          action: "Users experiencing significant delays"
+
+  # ==================== SECURITY ALERTS ====================
+  - name: security_alerts
+    interval: 30s
+    rules:
+      # High login failure rate
+      - alert: HighLoginFailureRate
+        expr: rate(login_attempts_total{status="failure"}[5m]) > 5
+        for: 2m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "High login failure rate"
+          description: "{{ $value }} failed logins per second"
+          action: "Possible brute force attack - check IP addresses"
+      
+      # Rate limiting triggered frequently
+      - alert: FrequentRateLimiting
+        expr: rate(rate_limit_exceeded_total[5m]) > 10
+        for: 3m
+        labels:
+          severity: warning
+          category: security
+        annotations:
+          summary: "Frequent rate limiting triggered"
+          description: "{{ $value }} rate limit violations per second"
+          action: "Possible DDoS attack or aggressive bot"
+      
+      # Critical rate limiting (DDoS attack)
+      - alert: PossibleDDoSAttack
+        expr: rate(rate_limit_exceeded_total[1m]) > 50
+        for: 1m
+        labels:
+          severity: critical
+          category: security
+        annotations:
+          summary: "🚨 POSSIBLE DDoS ATTACK"
+          description: "{{ $value }} rate limit violations per second"
+          action: "Block attacking IPs immediately, enable DDoS protection"
+
+  # ==================== DATABASE ALERTS ====================
+  - name: database_alerts
+    interval: 30s
+    rules:
+      # Slow database queries
+      - alert: SlowDatabaseQueries
+        expr: histogram_quantile(0.95, rate(db_query_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Slow database queries detected"
+          description: "95th percentile query time: {{ $value }}s"
+          action: "Optimize slow queries, check database indexes"
+      
+      # Database connection issues
+      - alert: HighDatabaseConnections
+        expr: db_connections_active > 100
+        for: 5m
+        labels:
+          severity: warning
+          category: database
+        annotations:
+          summary: "High number of database connections"
+          description: "{{ $value }} active connections"
+          action: "Check for connection leaks"
+
+  # ==================== BUSINESS ALERTS ====================
+  - name: business_alerts
+    interval: 1m
+    rules:
+      # No users online (suspicious)
+      - alert: NoUsersOnline
+        expr: online_users == 0
+        for: 30m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "No users online for extended period"
+          description: "Zero users online for 30 minutes"
+          action: "Check if application is accessible"
+      
+      # Unusual spike in users
+      - alert: UnusualUserSpike
+        expr: increase(online_users[5m]) > 100
+        for: 2m
+        labels:
+          severity: info
+          category: business
+        annotations:
+          summary: "Unusual spike in online users"
+          description: "100+ new users in 5 minutes"
+          action: "Monitor for performance issues, possible viral event"
+      
+      # Message delivery issues
+      - alert: LowMessageRate
+        expr: rate(messages_sent_total[10m]) < 0.1 and online_users > 10
+        for: 10m
+        labels:
+          severity: warning
+          category: application
+        annotations:
+          summary: "Low message rate despite active users"
+          description: "Users online but not sending messages"
+          action: "Check WebSocket connections"
+
+  # ==================== CACHE ALERTS ====================
+  - name: cache_alerts
+    interval: 1m
+    rules:
+      # Low cache hit rate
+      - alert: LowCacheHitRate
+        expr: rate(cache_hits_total[5m]) / (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m])) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate: {{ $value | humanizePercentage }}"
+          action: "Check Redis status, increase cache TTL"
+      
+      # Redis connection issues
+      - alert: RedisDown
+        expr: rate(cache_hits_total[1m]) == 0 and rate(cache_misses_total[1m]) == 0
+        for: 2m
+        labels:
+          severity: critical
+          category: infrastructure
+        annotations:
+          summary: "Redis appears to be down"
+          description: "No cache activity detected"
+          action: "Restart Redis immediately"
+
+  # ==================== FILE UPLOAD ALERTS ====================
+  - name: file_upload_alerts
+    interval: 1m
+    rules:
+      # Large file uploads spike
+      - alert: LargeFileUploadsSpike
+        expr: rate(file_upload_size_bytes[5m]) > 100000000
+        for: 5m
+        labels:
+          severity: warning
+          category: storage
+        annotations:
+          summary: "High volume of large file uploads"
+          description: "{{ $value | humanize }}B/s upload rate"
+          action: "Monitor disk space, possible abuse"
+      
+      # Disk space warning
+      - alert: DiskSpaceWarning
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.2
+        for: 5m
+        labels:
+          severity: warning
+          category: infrastructure
+        annotations:
+          summary: "Low disk space"
+          description: "Only {{ $value | humanizePercentage }} space remaining"
+          action: "Clean up old files or expand storage"

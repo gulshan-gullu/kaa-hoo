@@ -1,0 +1,132 @@
+<!-- ============================================================================
+     CA360 CHAT - SIMPLE WHATSAPP-STYLE CALLING MODALS
+     Copy this entire block and paste at the BOTTOM of your index.html
+     (Just before the </body> tag)
+     ============================================================================ -->
+
+<!-- Simple Call Modal Overlay -->
+<div id="simpleCallModal" class="simple-call-overlay" style="display: none;">
+    
+    <!-- =============== SCREEN 1: OUTGOING CALL (Caller) =============== -->
+    <div id="simple-outgoing-screen" class="simple-call-screen" style="display: none;">
+        <div class="simple-call-container">
+            
+            <!-- Avatar / Video Preview -->
+            <div class="simple-call-media">
+                <!-- Avatar (for voice calls) -->
+                <div class="simple-call-avatar" id="simple-outgoing-avatar">
+                    <span id="simple-outgoing-initial">?</span>
+                </div>
+                
+                <!-- Video Preview (for video calls - hidden by default) -->
+                <video id="simple-outgoing-video" class="simple-video-preview" autoplay muted playsinline style="display: none;"></video>
+            </div>
+            
+            <!-- Contact Info -->
+            <div class="simple-call-info">
+                <h2 class="simple-contact-name" id="simple-outgoing-name">Connecting...</h2>
+                <p class="simple-call-status" id="simple-outgoing-status">Calling...</p>
+            </div>
+            
+            <!-- Call Actions -->
+            <div class="simple-call-actions">
+                <button class="simple-btn simple-btn-cancel" id="simple-cancel-btn">
+                    <span class="simple-btn-icon">📴</span>
+                    <span class="simple-btn-text">Cancel</span>
+                </button>
+            </div>
+            
+        </div>
+    </div>
+    
+    <!-- =============== SCREEN 2: INCOMING CALL (Receiver) =============== -->
+    <div id="simple-incoming-screen" class="simple-call-screen" style="display: none;">
+        <div class="simple-call-container">
+            
+            <!-- Avatar -->
+            <div class="simple-call-media">
+                <div class="simple-call-avatar simple-avatar-ringing" id="simple-incoming-avatar">
+                    <span id="simple-incoming-initial">?</span>
+                </div>
+            </div>
+            
+            <!-- Contact Info -->
+            <div class="simple-call-info">
+                <h2 class="simple-contact-name" id="simple-incoming-name">Unknown</h2>
+                <p class="simple-call-status simple-status-ringing" id="simple-incoming-status">
+                    <span class="simple-ring-icon">🔔</span>
+                    Incoming Voice Call
+                </p>
+            </div>
+            
+            <!-- Call Actions -->
+            <div class="simple-call-actions simple-actions-dual">
+                <button class="simple-btn simple-btn-reject" id="simple-reject-btn">
+                    <span class="simple-btn-icon">✖</span>
+                    <span class="simple-btn-text">Decline</span>
+                </button>
+                <button class="simple-btn simple-btn-accept" id="simple-accept-btn">
+                    <span class="simple-btn-icon">✓</span>
+                    <span class="simple-btn-text">Accept</span>
+                </button>
+            </div>
+            
+        </div>
+    </div>
+    
+    <!-- =============== SCREEN 3: ACTIVE CALL =============== -->
+    <div id="simple-active-screen" class="simple-call-screen" style="display: none;">
+        <div class="simple-call-container simple-active-container">
+            
+            <!-- Video Container (for video calls) -->
+            <div class="simple-video-container" id="simple-video-wrapper" style="display: none;">
+                <!-- Remote Video (other person) -->
+                <video id="simple-remote-video" class="simple-remote-video" autoplay playsinline></video>
+                
+                <!-- Local Video (you - small corner) -->
+                <video id="simple-local-video" class="simple-local-video" autoplay muted playsinline></video>
+            </div>
+            
+            <!-- Avatar (for voice calls) -->
+            <div class="simple-call-media" id="simple-active-avatar-wrapper">
+                <div class="simple-call-avatar" id="simple-active-avatar">
+                    <span id="simple-active-initial">?</span>
+                </div>
+            </div>
+            
+            <!-- Contact Info & Timer -->
+            <div class="simple-call-info">
+                <h2 class="simple-contact-name" id="simple-active-name">In Call</h2>
+                <p class="simple-call-timer" id="simple-call-timer">00:00:00</p>
+            </div>
+            
+            <!-- Call Controls -->
+            <div class="simple-call-controls">
+                <button class="simple-control-btn simple-btn-mute" id="simple-mute-btn" title="Mute">
+                    <span class="simple-control-icon">🎤</span>
+                    <span class="simple-control-label">Mic</span>
+                </button>
+                
+                <button class="simple-control-btn simple-btn-video-toggle" id="simple-video-toggle-btn" title="Video" style="display: none;">
+                    <span class="simple-control-icon">📹</span>
+                    <span class="simple-control-label">Video</span>
+                </button>
+                
+                <button class="simple-control-btn simple-btn-end-call" id="simple-end-btn" title="End Call">
+                    <span class="simple-control-icon">📴</span>
+                    <span class="simple-control-label">End</span>
+                </button>
+            </div>
+            
+        </div>
+    </div>
+    
+    <!-- Hidden Audio Elements -->
+    <audio id="simple-remote-audio" autoplay></audio>
+    <audio id="simple-local-audio" muted></audio>
+    
+</div>
+
+<!-- ============================================================================
+     END OF SIMPLE CALLING MODALS
+     ============================================================================ -->

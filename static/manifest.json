@@ -1,0 +1,116 @@
+{
+  "name": "Kaa-Ho Chat - Stay Connected, Stay Close",
+  "short_name": "Kaa-Ho",
+  "description": "Enterprise-grade chat with HD calling and real-time communication",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#2f3640",
+  "theme_color": "#a3cb9f",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/static/icons/favicon-16x16.png",
+      "sizes": "16x16",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/favicon-32x32.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/favicon-48x48.png",
+      "sizes": "48x48",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icons/favicon-64x64.png",
+      "sizes": "64x64",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/favicon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/static/icons/favicon.ico",
+      "sizes": "16x16 32x32 48x48",
+      "type": "image/x-icon"
+    }
+  ],
+  "categories": ["social", "communication", "business", "productivity"],
+  "shortcuts": [
+    {
+      "name": "New Chat",
+      "short_name": "Chat",
+      "description": "Start a new conversation",
+      "url": "/",
+      "icons": [{ 
+        "src": "/static/icons/favicon-128x128.png", 
+        "sizes": "128x128" 
+      }]
+    },
+    {
+      "name": "Voice Call",
+      "short_name": "Call",
+      "description": "Start a voice call with enterprise TURN support",
+      "url": "/?action=call",
+      "icons": [{ 
+        "src": "/static/icons/favicon-128x128.png", 
+        "sizes": "128x128" 
+      }]
+    },
+    {
+      "name": "Video Call",
+      "short_name": "Video",
+      "description": "Start HD video call with crystal clear quality",
+      "url": "/?action=video",
+      "icons": [{ 
+        "src": "/static/icons/favicon-128x128.png", 
+        "sizes": "128x128" 
+      }]
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false,
+  "scope": "/",
+  "lang": "en-US",
+  "dir": "ltr",
+  "share_target": {
+    "action": "/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "media",
+          "accept": ["image/*", "video/*", "audio/*", "application/pdf"]
+        }
+      ]
+    }
+  }
+}
