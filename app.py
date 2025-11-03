@@ -95,7 +95,12 @@ active_users = {}
 # Register new blueprints
 from routes.contacts_routes import contacts_bp
 from routes.google_auth_routes import google_auth_bp
-
+from routes.auth_routes import auth_bp
+from routes.message_routes import message_bp
+from routes.user_routes import user_bp
+app.register_blueprint(auth_bp)
+app.register_blueprint(message_bp)
+app.register_blueprint(user_bp)
 app.register_blueprint(contacts_bp)
 app.register_blueprint(google_auth_bp)
 app.register_blueprint(voice_bp)
